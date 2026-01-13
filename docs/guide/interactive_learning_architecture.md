@@ -9,37 +9,65 @@ This document provides a deep dive into the **Interactive Learning Visualization
 
 ## 🎯 User Stories
 
-### 1. Personalized Learning Plan
-**As a** Learner,
-**I want** the system to analyze my notebook records and create a structured learning plan with 3-5 progressive knowledge points,
-**So that** I can break down complex topics into manageable steps without feeling overwhelmed.
+### 1. Personalized Learning Plan (Curriculum Generation)
+**As a** Learner with a notebook full of raw research and QA records,
+**I want** the system to generate a structured curriculum with 3-5 progressive knowledge points,
+**So that** I can navigate the material in a logical sequence instead of reading unstructured logs.
 
 **Acceptance Criteria:**
-- **Input:** Notebook ID and list of records (Question, Research, Solve output).
-- **Processing:** `LocateAgent` identifies core concepts and organizes them logically.
-- **Output:** A list of `KnowledgePoint` objects (Title, Summary, Difficulty).
-- **Error Handling:** If no valid records exist, return an explicit error message.
+- **Input:** A specific Notebook ID.
+- **Processing:** The system invokes `LocateAgent` to analyze the notebook's semantic content.
+- **Output:** A persisted session containing a list of `KnowledgePoint` objects.
+- **Feedback:** If the notebook is empty or analysis fails, the user receives a clear "Analysis Failed" error message.
 
-### 2. Interactive Visualization
+### 2. Interactive Visualization (Active Learning)
 **As a** Visual Learner,
-**I want** to see an interactive HTML page explaining the current knowledge point,
-**So that** I can understand abstract concepts through visual aids rather than just text.
+**I want** each knowledge point to be presented as an interactive HTML page with mathematical rendering and styled content,
+**So that** I can digest complex concepts (like algorithms or equations) more easily than plain text.
 
 **Acceptance Criteria:**
-- **Trigger:** Starting a new knowledge point.
-- **Generation:** `InteractiveAgent` generates a custom HTML page with Katex support.
-- **Reliability:** If the generated HTML is invalid, the system automatically falls back to a safe default template.
-- **Persistence:** The generated HTML is saved to the session state.
+- **Trigger:** Moving to a new knowledge point (Start or Next).
+- **Generation:** `InteractiveAgent` creates a custom HTML page tailored to the specific concept.
+- **Reliability:** If the AI generates broken HTML, the system silently swaps it for a robust "Fallback Template" so my learning is never interrupted.
+- **State:** The generated visual persists so I can return to it later.
 
-### 3. Context-Aware Q&A
-**As a** Curious Student,
-**I want** to ask questions about the specific topic I am currently viewing,
-**So that** I can get targeted clarifications without the AI losing context or referencing unrelated topics.
+### 3. Context-Aware Q&A (Targeted Assistance)
+**As a** Student stuck on a specific concept,
+**I want** to ask questions that the AI answers *only* using information relevant to the current topic,
+**So that** I don't get confused by advanced concepts from later chapters or irrelevant details from previous ones.
 
 **Acceptance Criteria:**
-- **Context:** `ChatAgent` receives the current `knowledge_index` context.
-- **Scoping:** Chat history is filtered; the AI primarily considers the current topic's history.
-- **History:** All interactions are logged in the global session history.
+- **Scoping:** The AI sees my question + the current knowledge point info + only the chat history *for this specific point*.
+- **Logging:** My question and the AI's answer are saved with a "page number" tag (`knowledge_index`).
+
+### 4. Visual Debugging (Fix HTML)
+**As a** User noticing a rendering glitch (e.g., a broken formula or overlapping text),
+**I want** to describe the visual bug to the system,
+**So that** the AI can regenerate the HTML code to fix the display issue without losing my place.
+
+**Acceptance Criteria:**
+- **Input:** A natural language description of the bug (e.g., "The equation text is too small").
+- **Processing:** `InteractiveAgent` is re-called with the original content AND the bug report.
+- **Output:** The page refreshes with the corrected HTML.
+
+### 5. Session Resumption & Continuity
+**As a** Busy Learner who studies in short bursts,
+**I want** my progress, chat history, and current visual to be saved automatically,
+**So that** I can close the browser and pick up exactly where I left off days later.
+
+**Acceptance Criteria:**
+- **Persistence:** Every state change (chat, next topic, generated page) is immediately written to disk (`session_{id}.json`).
+- **Restoration:** Loading a session ID restores the exact state machine status (`learning`, `index`, `html`).
+
+### 6. Learning Summary
+**As a** Learner who has finished the curriculum,
+**I want** a comprehensive summary of what I've learned,
+**So that** I can review key takeaways and assess my mastery.
+
+**Acceptance Criteria:**
+- **Trigger:** Completing the final knowledge point.
+- **Processing:** `SummaryAgent` reviews the entire curriculum and my chat history.
+- **Output:** A text summary displayed in the UI, marking the session status as `completed`.
 
 ---
 
@@ -79,128 +107,196 @@ graph TD
     User -->|chat| GM
     GM -->|3. Contextual Q&A| CA
 
+    User -->|fix_html| GM
+    GM -->|3b. Regenerate| IA
+
     User -->|finish| GM
     GM -->|4. Generate Summary| SA
 ```
 
-### Core Dependencies
-- **`GuideManager`**: Lifecycle and state management.
-- **`LocateAgent`**: Curriculum planning (LLM-based).
-- **`InteractiveAgent`**: HTML/JS generation (LLM-based).
-- **`ChatAgent`**: Context-aware Q&A.
-- **`SummaryAgent`**: Session completion summary.
-- **Storage**: Local filesystem (JSON) for session persistence.
+---
+
+## 🔧 Detailed Design: Component Specification
+
+### 1. Class: `GuideManager`
+**Role:** Central Controller & State Machine.
+**Location:** `src/agents/guide/guide_manager.py`
+
+#### Method: `create_session`
+*   **Purpose:** Initializes a new learning journey.
+*   **Inputs:** `notebook_id` (str), `notebook_name` (str), `records` (List[dict]).
+*   **Logic:**
+    1.  Generates a short UUID for `session_id`.
+    2.  Calls `LocateAgent.process(notebook_data)` to get a list of knowledge points.
+    3.  If successful, creates a `GuidedSession` object with `status="initialized"`.
+    4.  Calls `_save_session()` to persist data.
+*   **Outputs:** `dict` containing `session_id`, `knowledge_points`, and success status.
+*   **Edge Cases:** Returns failure if `LocateAgent` fails or returns 0 points.
+
+#### Method: `start_learning`
+*   **Purpose:** Transitions state from `initialized` to `learning`.
+*   **Inputs:** `session_id` (str).
+*   **Logic:**
+    1.  Loads session. Checks existence.
+    2.  Gets the **first** knowledge point (Index 0).
+    3.  Calls `InteractiveAgent.process(knowledge)` to generate HTML.
+    4.  Updates session: `current_index=0`, `status="learning"`, `current_html=...`.
+    5.  Logs a system message ("Starting to learn...").
+    6.  Saves session.
+*   **Outputs:** `dict` with `html`, `current_knowledge`, `progress`.
+
+#### Method: `next_knowledge`
+*   **Purpose:** Advances the user to the next topic OR triggers completion.
+*   **Inputs:** `session_id` (str).
+*   **Logic:**
+    1.  Calculates `new_index = current_index + 1`.
+    2.  **Check Completion:** If `new_index >= total_points`:
+        -   Calls `SummaryAgent.process()`.
+        -   Updates state to `completed`.
+        -   Returns summary.
+    3.  **Else (Continue):**
+        -   Retrieves `knowledge_points[new_index]`.
+        -   Calls `InteractiveAgent.process()` for new HTML.
+        -   Updates state: `current_index = new_index`.
+        -   Logs system transition message.
+        -   Saves session.
+*   **Outputs:** `dict` with new HTML (if continuing) or Summary (if finished).
+
+#### Method: `chat`
+*   **Purpose:** Handles user Q&A with context scoping.
+*   **Inputs:** `session_id` (str), `user_message` (str).
+*   **Logic:**
+    1.  Verifies status is `learning`.
+    2.  **Context Scoping:** Filters `session.chat_history`:
+        -   `relevant_history = [msg for msg in history if msg.knowledge_index == current_index]`
+    3.  Appends User Message to history (tagged with index).
+    4.  Calls `ChatAgent.process(knowledge, relevant_history, question)`.
+    5.  Appends Assistant Answer to history (tagged with index).
+    6.  Saves session.
+*   **Outputs:** `dict` with `answer`.
+
+#### Method: `fix_html`
+*   **Purpose:** Regenerates the current visual based on user feedback.
+*   **Inputs:** `session_id`, `bug_description`.
+*   **Logic:**
+    1.  Retrieves current knowledge point.
+    2.  Calls `InteractiveAgent.process(knowledge, retry_with_bug=bug_description)`.
+    3.  Updates `session.current_html` with result.
+    4.  Saves session.
+*   **Outputs:** `dict` with new `html`.
 
 ---
 
-## 🔧 Detailed Design (Technical Deep-Dive)
+### 2. Class: `InteractiveAgent`
+**Role:** Generates and validates HTML visualizations.
+**Location:** `src/agents/guide/agents/interactive_agent.py`
 
-### 1. Logic Flow: Learning Session Lifecycle
+#### Method: `process`
+*   **Inputs:** `knowledge` (dict), `retry_with_bug` (Optional[str]).
+*   **Logic:**
+    1.  Selects Prompt:
+        -   Standard: "Generate an educational HTML page for {title}..."
+        -   Retry: "Fix the following issues: {bug}..."
+    2.  Calls LLM.
+    3.  **Extraction:** Extracts content between ` ```html ` tags using regex.
+    4.  **Validation:** Calls `_validate_html()`.
+        -   Checks for required tags (`<html`, `<body`, etc.).
+    5.  **Fallback:** If validation fails, calls `_generate_fallback_html()`.
+*   **Outputs:** `dict` with `html`, `is_fallback` (bool).
 
-#### Phase 1: Initialization (`create_session`)
-1.  **Input**: Notebook data.
-2.  **Analysis**: `LocateAgent` analyzes records to extract `KnowledgePoints`.
-3.  **State Creation**: A `GuidedSession` object is created with `status="initialized"`.
-4.  **Persistence**: Saved to `data/user/guide/session_{uuid}.json`.
+#### Method: `_generate_fallback_html` (Private)
+*   **Purpose:** Safety net for LLM failures.
+*   **Logic:** Returns a hardcoded Python f-string HTML template with:
+    -   Standard CSS styling (Cards, Tailwind-like).
+    -   Katex JS libraries pre-included.
+    -   Knowledge content injected into the `<body>`.
+*   **Benefit:** Ensures the user never sees a blank screen or raw JSON error.
 
-#### Phase 2: Active Learning (`start_learning` / `next_knowledge`)
-This flow handles the transition between knowledge points.
+---
 
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant GM as GuideManager
-    participant IA as InteractiveAgent
-    participant DB as File System
+### 3. Class: `LocateAgent`
+**Role:** Curriculum Planner.
+**Location:** `src/agents/guide/agents/locate_agent.py`
 
-    U->>GM: start_learning(session_id)
-    GM->>DB: Load Session
+#### Method: `process`
+*   **Inputs:** `notebook_records` (List).
+*   **Logic:**
+    1.  Formats records into a readable text block.
+    2.  Prompt: "Analyze these records. Identify 3-5 core knowledge points. Order them progressively."
+    3.  Request `json_object` format from LLM.
+    4.  Parses and validates the JSON list.
+*   **Outputs:** `dict` containing `knowledge_points`.
 
-    opt Session Valid?
-        GM-->>U: Error if missing
-    end
+---
 
-    GM->>GM: Get KnowledgePoint[CurrentIndex]
-    GM->>IA: process(knowledge)
+### 4. Class: `ChatAgent`
+**Role:** Contextual Q&A.
+**Location:** `src/agents/guide/agents/chat_agent.py`
 
-    alt HTML Generation Success
-        IA-->>GM: Returns Custom HTML
-    else Validation Failed
-        IA->>IA: Use Fallback Template
-        IA-->>GM: Returns Fallback HTML
-    end
+#### Method: `process`
+*   **Inputs:** `knowledge` (dict), `chat_history` (List), `user_question` (str).
+*   **Logic:**
+    1.  Constructs prompt with:
+        -   **Current Context:** "The user is learning about {title}: {summary}"
+        -   **History:** "Previous relevant questions: {history}"
+        -   **Instruction:** "Answer concisely. Do not reference unrelated topics."
+    2.  Calls LLM.
+*   **Outputs:** `dict` with `answer`.
 
-    GM->>GM: Update Session (current_html, status="learning")
-    GM->>DB: Save Session
-    GM-->>U: Return {html, progress_info}
-```
+---
 
-#### Phase 3: Interaction (`chat`)
-1.  **Context Scoping**: The manager filters the global chat history.
-    - `relevant_history = [msg for msg in history if msg.knowledge_index == current_index]`
-2.  **Processing**: `ChatAgent` generates a response based on the *specific* knowledge point.
-3.  **Logging**: The user query and AI response are appended to `chat_history` with the current `knowledge_index`.
-
-### 2. Data Structures
+## 📊 Data Structures
 
 #### `GuidedSession` Schema (JSON)
+Stored in `data/user/guide/session_{uuid}.json`.
+
 ```json
 {
-  "session_id": "uuid-string",
-  "notebook_id": "string",
-  "created_at": 1234567890.0,
-  "status": "initialized | learning | completed",
-  "current_index": 0,
+  "session_id": "a1b2c3d4",
+  "notebook_id": "nb_123",
+  "created_at": 1715000000.0,
+  "status": "learning",
+  "current_index": 1,
+  "current_html": "<!DOCTYPE html>...",
   "knowledge_points": [
     {
-      "knowledge_title": "Concept A",
-      "knowledge_summary": "Description...",
-      "user_difficulty": "Why this is hard..."
+      "knowledge_title": "1. Vector Embeddings",
+      "knowledge_summary": "Vectors represent semantic meaning...",
+      "user_difficulty": "Concept of high-dimensional space."
+    },
+    {
+      "knowledge_title": "2. Cosine Similarity",
+      "knowledge_summary": "Measuring distance between vectors...",
+      "user_difficulty": "Math formula understanding."
     }
   ],
   "chat_history": [
     {
       "role": "user",
-      "content": "Explain this graph.",
+      "content": "What is a vector?",
       "knowledge_index": 0,
-      "timestamp": 1234567899.0
+      "timestamp": 1715000010.0
+    },
+    {
+      "role": "assistant",
+      "content": "A vector is...",
+      "knowledge_index": 0,
+      "timestamp": 1715000015.0
     }
   ],
-  "current_html": "<!DOCTYPE html>...",
-  "summary": "Final session summary..."
+  "summary": ""
 }
 ```
 
-### 3. Edge Case Handling
+## 💡 Learning Insight: "State Machine Pattern"
 
-| Scenario | Handling Strategy |
-| :--- | :--- |
-| **LLM Generates Invalid HTML** | `InteractiveAgent._validate_html` checks for basic tags. If failed, it returns a hardcoded **Fallback Template** that displays text content safely. |
-| **No Records in Notebook** | `LocateAgent` returns an empty list; `GuideManager` aborts session creation with a clear error message. |
-| **Server Restart** | Sessions are stateless in memory but persisted on disk. `_load_session` reconstructs the full state object from JSON on any request. |
-| **User Skips Ahead** | The system enforces linear progression via `next_knowledge`. Random access is not currently exposed in the public API to ensure pedagogical flow. |
+**Concept:** How does the system know "where" you are?
 
----
+The `GuideManager` implements a **State Machine**. This is a design pattern where the system can only be in one of a few specific "states" at a time, and it moves between them based on specific "events".
 
-## 💡 Learning Insight: "Context Scoping"
+- **State 1: Initialized**: The plan is ready, but you haven't started.
+- **State 2: Learning**: You are actively viewing content. The `current_index` variable tracks exactly which page (0, 1, 2...) you are on.
+- **State 3: Completed**: You finished everything.
 
-**Concept:** How does the AI know what we are talking about *right now*?
-
-Imagine you are reading a textbook. When you are on **Chapter 1**, you don't want your tutor to answer questions using information from **Chapter 10** that you haven't learned yet, or get confused by a question you asked yesterday about the Preface.
-
-In this system, we use **Context Scoping**.
-Every time you send a message, it is "tagged" with a page number (the `knowledge_index`).
-
-When the `ChatAgent` wakes up to answer you, the `GuideManager` acts like a filter. It says:
-> *"Here is the user's question. Only look at the conversation history from **Page 1**. Ignore the chat history from Page 2 or Page 3."*
-
-**Code Logic Simplified:**
-```python
-# In GuideManager.chat()
-current_history = [
-    msg
-    for msg in session.chat_history
-    if msg.get("knowledge_index") == session.current_index
-]
-```
-This ensures the AI stays focused on the exact concept you are learning, providing accurate and relevant help.
+**Why use this?**
+It makes the code predictable. For example, the `chat()` function checks `if status == 'learning'`. This prevents bugs like trying to ask a question before the session is created or after it's closed.

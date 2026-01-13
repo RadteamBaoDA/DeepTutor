@@ -229,12 +229,15 @@ class GuideManager:
         """
         Get learning state information (internal helper method)
 
+        Calculates progress percentage and determines if the session is
+        'learning' or 'completed' based on the index.
+
         Args:
             knowledge_points: Knowledge point list
             current_index: Current knowledge point index
 
         Returns:
-            Learning state information
+            dict: Learning state information (status, progress, message, etc.)
         """
         total_points = len(knowledge_points)
 
@@ -326,13 +329,26 @@ class GuideManager:
 
     async def next_knowledge(self, session_id: str) -> dict[str, Any]:
         """
-        Move to next knowledge point
+        Move to next knowledge point (Phase 2 Continued: Progression)
+
+        Logic Flow:
+        1. Calculate `new_index = current_index + 1`.
+        2. Check for Completion:
+           - If `new_index >= total_points`:
+             - Call SummaryAgent.process().
+             - Update state to "completed".
+             - Return summary.
+        3. Else (Continue Learning):
+           - Retrieve new knowledge point.
+           - Call InteractiveAgent.process() for new HTML.
+           - Update state (current_index = new_index).
+           - Save session.
 
         Args:
             session_id: Session ID
 
         Returns:
-            Next knowledge point information and interactive page, or completion summary
+            dict: Next knowledge point information and interactive page, or completion summary.
         """
         session = self._load_session(session_id)
         if not session:
@@ -471,14 +487,20 @@ class GuideManager:
 
     async def fix_html(self, session_id: str, bug_description: str) -> dict[str, Any]:
         """
-        Fix HTML page bug
+        Fix HTML page bug (Visual Debugging)
+
+        Logic Flow:
+        1. Retrieve current knowledge point.
+        2. Call InteractiveAgent.process(knowledge, retry_with_bug=bug_description).
+        3. Update `session.current_html` with the fixed result.
+        4. Save session.
 
         Args:
             session_id: Session ID
-            bug_description: Bug description
+            bug_description: Bug description (e.g., "The graph is empty")
 
         Returns:
-            Fixed HTML
+            dict: Fixed HTML content.
         """
         session = self._load_session(session_id)
         if not session:
