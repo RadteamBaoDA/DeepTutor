@@ -2,19 +2,37 @@
 
 ## 🎯 User Stories
 
-### Learner
-**As a** Learner,
-**I want to** upload a past exam paper or reference questions,
-**So that** I can practice with questions that mimic the exact style, format, and difficulty of the real exam.
+### Granular User Stories
 
-**Acceptance Criteria:**
-- The system can parse uploaded PDF exam papers (text, images, equations).
-- The system identifies and extracts individual questions from the parsed content.
-- The system generates new "mimic" questions for each reference question.
-- The generated questions maintain the same core concept and difficulty but change the scenario/numbers.
-- The system produces a comprehensive output containing the original and generated questions.
+#### 1. Ingestion (PDF Parsing)
+-   **As a system**, I want to locate the uploaded PDF exam paper or a pre-parsed directory.
+-   **As a system**, I want to use `MinerU` to parse the PDF, ensuring mathematical formulas ($LaTeX$) and tables are preserved in Markdown format.
+-   **As a system**, I want to extract images from the PDF and save them to an assets folder for reference.
+
+#### 2. Extraction
+-   **As a system**, I want to identify individual questions from the raw Markdown content using an LLM.
+-   **As a system**, I want to split multiple-choice questions into "Stem" and "Options".
+-   **As a system**, I want to associate extracted images with their corresponding questions.
+
+#### 3. Generation (Mimicry)
+-   **As a system**, I want to generate a new "Mimic" question for *each* extracted reference question.
+-   **As a system**, I want the new question to maintain the exact same difficulty and core concept as the reference.
+-   **As a system**, I want to change the scenario, numbers, or variable names to create a unique practice problem.
+-   **As a system**, I want to enforce a "No Rejection" policy to ensure every reference question gets a corresponding practice question.
 
 ## 🔧 Detailed Design
+
+### Function Specifications
+
+The following table details the key functions in `src/agents/question/tools/exam_mimic.py` and `question_extractor.py`.
+
+| Function | Signature | Purpose | Logic Details |
+| :--- | :--- | :--- | :--- |
+| `mimic_exam_questions` | `(pdf_path: str, kb_name: str, ...) -> dict` | **Main Orchestrator**. Manages the full pipeline: Parse -> Extract -> Generate. | 1. Checks inputs (PDF vs Directory)<br>2. Calls `parse_pdf_with_mineru` (if needed)<br>3. Calls `extract_questions_from_paper`<br>4. Loops through questions to call `generate_question_from_reference` in parallel. |
+| `parse_pdf_with_mineru` | `(pdf_path: str, output_dir: str) -> bool` | high-fidelity PDF parsing. | Wraps the external `magic-pdf` (MinerU) CLI tool. Generates Markdown + Images. |
+| `extract_questions_from_paper` | `(paper_dir: str) -> bool` | Extracts structured questions. | Loads markdown -> Calls `extract_questions_with_llm` -> Saves `*_questions.json`. |
+| `extract_questions_with_llm` | `(markdown: str, images_dir: Path, ...) -> list` | LLM-based parsing of raw text. | Prompts LLM to split text into list of `{question_number, question_text, images}`. Handles context limits. |
+| `generate_question_from_reference` | `(ref_question: dict, coordinator, kb_name) -> dict` | Generates a single mimic question. | Constructs a strict prompt: "Identify concept, keep difficulty, change scenario". Calls `coordinator.generate_question`. |
 
 ### Logic Flow
 
@@ -24,48 +42,30 @@ Mimic Mode relies on a **Parse -> Extract -> Clone** pipeline. The goal is 1:1 m
 
 ```mermaid
 flowchart TD
-    Start((Start)) --> Upload[User Uploads PDF]
-    Upload --> Parse[MinerU PDF Parsing]
-    Parse --> Markdown[Markdown Output]
+    Start((Start)) --> InputCheck{Input Type?}
+    InputCheck -->|PDF| Parse[MinerU Parsing]
+    InputCheck -->|Directory| Load[Load Existing]
 
-    Markdown --> Extract[LLM Extraction Agent]
+    Parse --> Markdown[Markdown Content]
+    Load --> Markdown
+
+    Markdown --> Extract[extract_questions_with_llm]
     Extract --> RefList[List of Reference Questions]
 
-    RefList --> Split{Parallel Loop}
+    RefList --> ParallelLoop{Parallel Execution}
 
-    Split -->|Question 1| Gen1[Gen Agent: Mimic Q1]
-    Split -->|Question 2| Gen2[Gen Agent: Mimic Q2]
-    Split -->|Question N| GenN[Gen Agent: Mimic QN]
+    ParallelLoop -->|Q1| Agent1[generate_question_from_reference]
+    ParallelLoop -->|Q2| Agent2[generate_question_from_reference]
+    ParallelLoop -->|Qn| AgentN[generate_question_from_reference]
 
-    Gen1 --> Result1[New Question 1]
-    Gen2 --> Result2[New Question 2]
-    GenN --> ResultN[New Question N]
+    Agent1 --> Prompt[Prompt: Same Concept, New Numbers]
+    Prompt --> Coordinator[Coordinator.generate_question]
+    Coordinator --> Result1[New Question JSON]
 
-    Result1 & Result2 & ResultN --> Merge[Merge Results]
-    Merge --> Output[JSON/Report]
-    Output --> End((End))
+    Result1 & Result2 & ResultN --> Aggregator[Merge Results]
+    Aggregator --> OutputFile[Save JSON Report]
+    OutputFile --> End((End))
 ```
-
-### Algorithm Description
-
-1.  **Ingestion (PDF Parsing)**:
-    -   The system uses **MinerU** (via `src/agents/question/tools/pdf_parser.py`) to convert the raw PDF into a rich Markdown format.
-    -   *Why MinerU?* Standard text extractors fail on mathematical formulas ($LaTeX$) and complex layout structures common in exams.
-
-2.  **Extraction**:
-    -   The `extract_questions_from_paper` tool takes the Markdown and asks an LLM to identify distinct questions.
-    -   It cleans up the text, separating "Question 1" from "Question 2", and preserves links to any images referenced.
-
-3.  **Mimicry (Parallel Generation)**:
-    -   The coordinator launches a generation task for *each* extracted reference question.
-    -   **Prompt Strategy**: The prompt (`src/agents/question/tools/exam_mimic.py`) is strictly engineered:
-        -   **Identify Core Concept**: What math principle is being tested?
-        -   **Keep Difficulty**: Do not make it easier or harder.
-        -   **Change Scenario**: Change the numbers, functions, or physical setting (e.g., change "projectile motion" to "car braking" if the physics is the same).
-        -   **Forbid Rejection**: The agent *must* produce a question, even if the reference is obscure.
-
-4.  **Result Aggregation**:
-    -   The system saves a structured JSON file mapping each `reference_question` to its `generated_question`.
 
 ### Data Structures
 

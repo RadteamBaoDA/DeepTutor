@@ -2,19 +2,37 @@
 
 ## 🎯 User Stories
 
-### Learner
-**As a** Learner,
-**I want to** generate targeted practice exercises based on my current knowledge level and specific topics,
-**So that** I can reinforce my understanding of weak areas and prepare for upcoming assessments.
+### Granular User Stories
 
-**Acceptance Criteria:**
-- The system accepts natural language requirements (e.g., "medium difficulty questions about calculus limits").
-- The system retrieves relevant background knowledge from the course knowledge base.
-- The system generates a configurable number of unique questions.
-- Each question includes a detailed explanation and correct answer.
-- The system validates that the generated questions are relevant to the requested topic.
+#### 1. Retrieval & Research
+-   **As a system**, I want to interpret the user's natural language request to extract specific metadata (Topic, Difficulty, Question Type).
+-   **As a system**, I want to generate multiple distinct search queries based on the topic to ensure broad coverage of the knowledge base.
+-   **As a system**, I want to retrieve knowledge chunks in parallel using RAG to minimize latency.
+-   **As a system**, I want to summarize the retrieved chunks into a cohesive "Background Knowledge" context for the LLM.
+
+#### 2. Planning
+-   **As a system**, I want to generate a "Question Plan" that lists distinct focuses for `N` questions.
+-   **As a system**, I want to ensure each focus is unique (e.g., "Concept Definition" vs "Problem Solving" vs "Edge Case") to avoid repetitive questions.
+
+#### 3. Generation & Validation
+-   **As a system**, I want to generate a question based on a specific focus and the background knowledge.
+-   **As a system**, I want to validate the generated question for "Relevance" (High vs Partial) instead of just rejecting it.
+-   **As a system**, I want to save the final question artifacts (JSON, Markdown) to disk for persistence.
 
 ## 🔧 Detailed Design
+
+### Function Specifications
+
+The following table details the key functions in `src/agents/question/coordinator.py` and related modules that implement this logic.
+
+| Function | Signature | Purpose | Logic Details |
+| :--- | :--- | :--- | :--- |
+| `generate_questions_custom` | `(base_requirement: dict, num_questions: int) -> dict` | **Main Entry Point**. Orchestrates the Research -> Plan -> Generate workflow. | 1. Calls `_generate_search_queries_from_text`<br>2. Calls `_gather_retrieval_context_naive`<br>3. Calls `_generate_question_plan`<br>4. Loops through plan to call `_generate_single_question_custom` |
+| `_generate_search_queries_from_text` | `(requirement_text: str, num_queries: int) -> list[str]` | Converts user text into optimized RAG queries. | Uses LLM to extract "Pure Knowledge Point Names" (e.g., "Taylor Theorem") suitable for vector search, avoiding instruction text. |
+| `_gather_retrieval_context_naive` | `(queries: list[str]) -> list[dict]` | Executes parallel RAG searches. | Uses `asyncio.gather` to run `rag_search` for each query. Returns a list of `{query, answer}` objects. |
+| `_generate_question_plan` | `(base_req: dict, knowledge: str, num: int) -> dict` | Creates a blueprint for distinct questions. | Prompts LLM to output a JSON list of `focus` objects. Ensures distinct angles (e.g., calculation vs theory). |
+| `_generate_single_question_custom` | `(focus: dict, base_req: dict, knowledge: str) -> dict` | Generates one question artifact. | Prompts LLM with specific focus + knowledge. Returns strict JSON with question text, options, answer, and explanation. |
+| `QuestionValidationWorkflow.analyze_relevance` | `(question: dict, knowledge_summary: str) -> dict` | Validates the output quality. | Analyzes if the question is supported by the KB. Returns `high` (fully supported) or `partial` (extends beyond KB). |
 
 ### Logic Flow
 
@@ -34,56 +52,31 @@ sequenceDiagram
     User->>Coordinator: Request("3 medium limit questions")
 
     %% Stage 1: Research
-    Coordinator->>LLM: Generate Search Queries
+    Coordinator->>LLM: _generate_search_queries_from_text
     LLM-->>Coordinator: ["Limit def", "L'Hopital", "Continuity"]
-    Coordinator->>RAG: Retrieve(Queries)
+    Coordinator->>RAG: _gather_retrieval_context_naive (Parallel)
     RAG-->>Coordinator: Knowledge Chunks
 
     %% Stage 2: Plan
-    Coordinator->>LLM: Plan Question Focuses(Knowledge, Count=3)
+    Coordinator->>LLM: _generate_question_plan
     LLM-->>Coordinator: Plan([Focus 1, Focus 2, Focus 3])
 
-    %% Stage 3: Execute (Parallel Loop)
-    par For Each Focus
-        Coordinator->>Agent: Generate Question(Focus, Knowledge)
-        Agent->>LLM: Write Question
-        LLM-->>Agent: JSON Question
-        Agent->>Coordinator: Submit
+    %% Stage 3: Execute (Sequential Loop for Custom Mode)
+    loop For Each Focus
+        Coordinator->>Coordinator: _generate_single_question_custom(Focus)
+        Coordinator->>LLM: Write Question JSON
+        LLM-->>Coordinator: Question Object
 
-        Coordinator->>Validator: Validate(Question, Knowledge)
-        Validator->>LLM: Analyze Relevance
-        LLM-->>Validator: Relevance Result (High/Partial)
-        Validator-->>Coordinator: Approved/Feedback
+        Coordinator->>Validator: analyze_relevance(Question, Knowledge)
+        Validator->>LLM: Analyze
+        LLM-->>Validator: Result (High/Partial)
+        Validator-->>Coordinator: Validation Result
+
+        Coordinator->>Coordinator: Save to Disk
     end
 
-    Coordinator->>User: Final Result (3 Questions)
+    Coordinator->>User: Final Summary JSON
 ```
-
-### Algorithm Description
-
-1.  **Requirement Interpretation**:
-    -   The `AgentCoordinator` first uses an LLM call to parse the user's natural language input into a structured requirement object:
-        ```json
-        {
-          "knowledge_point": "Calculus Limits",
-          "difficulty": "medium",
-          "question_type": "written"
-        }
-        ```
-
-2.  **Stage 1: Researching (Retrieval)**:
-    -   **Query Generation**: The system asks the LLM to generate `N` search queries based on the topic.
-    -   **Parallel Retrieval**: These queries are executed against the RAG system (Vector DB) in parallel.
-    -   **Summarization**: The results are aggregated into a single "Background Knowledge" text block.
-
-3.  **Stage 2: Planning**:
-    -   The system asks the LLM to create a **Question Plan**. It provides the background knowledge and asks for `N` distinct "Focuses".
-    -   This prevents duplicates (e.g., ensuring not all 3 questions test the exact same formula).
-
-4.  **Stage 3: Generating (Parallel Execution)**:
-    -   The coordinator spawns a `QuestionGenerationAgent` for each focus in the plan.
-    -   **Generation**: The agent uses a prompt template that combines the specific *Focus* + *Background Knowledge* to generate the question JSON.
-    -   **Validation**: The `QuestionValidationWorkflow` analyzes the result. Unlike older versions that might reject/regenerate in a loop, the current system performs a **Relevance Analysis**. It classifies the question as "High Relevance" (fully supported by KB) or "Partial Relevance" (extends beyond KB).
 
 ### Data Structures
 
