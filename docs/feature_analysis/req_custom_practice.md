@@ -10,14 +10,67 @@
 -   **As a system**, I want to retrieve knowledge chunks in parallel using RAG to minimize latency.
 -   **As a system**, I want to summarize the retrieved chunks into a cohesive "Background Knowledge" context for the LLM.
 
+##### Retrieval Workflow
+```mermaid
+flowchart LR
+    User[User Request] --> LLM[LLM Interpreter]
+    LLM --> Queries[Query List]
+    Queries --> Split{Parallel Split}
+
+    Split --> Q1[Query 1]
+    Split --> Q2[Query 2]
+    Split --> Q3[Query 3]
+
+    Q1 --> RAG[RAG Search]
+    Q2 --> RAG
+    Q3 --> RAG
+
+    RAG --> Context[Retrieved Chunks]
+    Context --> Summary[Background Summary]
+```
+
 #### 2. Planning
 -   **As a system**, I want to generate a "Question Plan" that lists distinct focuses for `N` questions.
 -   **As a system**, I want to ensure each focus is unique (e.g., "Concept Definition" vs "Problem Solving" vs "Edge Case") to avoid repetitive questions.
+
+##### Planning Object Model
+```mermaid
+classDiagram
+    class QuestionPlan {
+        +String knowledge_point
+        +String difficulty
+        +List~Focus~ focuses
+    }
+    class Focus {
+        +String id
+        +String focus_description
+        +String question_type
+    }
+    QuestionPlan *-- Focus : contains
+    note for Focus "Ensures diversity\nin generated questions"
+```
 
 #### 3. Generation & Validation
 -   **As a system**, I want to generate a question based on a specific focus and the background knowledge.
 -   **As a system**, I want to validate the generated question for "Relevance" (High vs Partial) instead of just rejecting it.
 -   **As a system**, I want to save the final question artifacts (JSON, Markdown) to disk for persistence.
+
+##### Generation State Machine
+```mermaid
+stateDiagram-v2
+    [*] --> Generating
+    Generating --> Analyzed: LLM creates Question
+    Analyzed --> Validating: Submit to Workflow
+
+    state Validating {
+        [*] --> CheckRelevance
+        CheckRelevance --> HighRelevance: Supported by KB
+        CheckRelevance --> PartialRelevance: Extends beyond KB
+    }
+
+    Validating --> Saving: Relevance Determined
+    Saving --> [*]: Write JSON/MD
+```
 
 ## 🔧 Detailed Design
 

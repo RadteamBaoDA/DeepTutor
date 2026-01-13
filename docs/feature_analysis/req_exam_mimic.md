@@ -9,16 +9,60 @@
 -   **As a system**, I want to use `MinerU` to parse the PDF, ensuring mathematical formulas ($LaTeX$) and tables are preserved in Markdown format.
 -   **As a system**, I want to extract images from the PDF and save them to an assets folder for reference.
 
+##### Ingestion Component Diagram
+```mermaid
+graph LR
+    User[User Upload] -->|PDF File| Parser[MinerU CLI]
+    Parser -->|Outputs| Folder[Output Directory]
+
+    subgraph Output Structure
+    Folder --> MD[auto/exam.md]
+    Folder --> JSON[auto/content_list.json]
+    Folder --> Imgs[auto/images/]
+    end
+```
+
 #### 2. Extraction
 -   **As a system**, I want to identify individual questions from the raw Markdown content using an LLM.
 -   **As a system**, I want to split multiple-choice questions into "Stem" and "Options".
 -   **As a system**, I want to associate extracted images with their corresponding questions.
+
+##### Extraction Data Flow
+```mermaid
+flowchart TD
+    MD[Markdown Content] --> LLM[LLM Extractor]
+    ImgList[Image File List] --> LLM
+
+    LLM --> JSON[Questions JSON]
+
+    subgraph JSON Structure
+    Q1[Question 1: Text + [Img1]]
+    Q2[Question 2: Text + []]
+    end
+
+    JSON -- Contains --> Q1
+    JSON -- Contains --> Q2
+```
 
 #### 3. Generation (Mimicry)
 -   **As a system**, I want to generate a new "Mimic" question for *each* extracted reference question.
 -   **As a system**, I want the new question to maintain the exact same difficulty and core concept as the reference.
 -   **As a system**, I want to change the scenario, numbers, or variable names to create a unique practice problem.
 -   **As a system**, I want to enforce a "No Rejection" policy to ensure every reference question gets a corresponding practice question.
+
+##### Mimicry Process Flow
+```mermaid
+graph TD
+    Ref[Reference Question] --> Prompt[Construct Prompt]
+
+    Prompt -->|Instruction| P1[Identify Core Concept]
+    Prompt -->|Instruction| P2[Keep Difficulty]
+    Prompt -->|Instruction| P3[Change Scenario/Numbers]
+    Prompt -->|Constraint| P4[Forbid Rejection]
+
+    P1 & P2 & P3 & P4 --> LLM[Generation Agent]
+    LLM --> NewQ[Generated Mimic Question]
+```
 
 ## 🔧 Detailed Design
 
