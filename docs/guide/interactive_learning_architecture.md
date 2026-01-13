@@ -210,7 +210,7 @@ graph TD
     -   Standard CSS styling (Cards, Tailwind-like).
     -   Katex JS libraries pre-included.
     -   Knowledge content injected into the `<body>`.
-*   **Benefit:** Ensures the user never sees a blank screen or raw JSON error.
+*   **Benefit:** Ensures the user experience is never blocked.
 
 ---
 
@@ -300,3 +300,70 @@ The `GuideManager` implements a **State Machine**. This is a design pattern wher
 
 **Why use this?**
 It makes the code predictable. For example, the `chat()` function checks `if status == 'learning'`. This prevents bugs like trying to ask a question before the session is created or after it's closed.
+
+---
+
+## 💻 Developer Resources & Implementation Guide
+
+### 1. File Structure Map (`src/agents/guide/`)
+
+| File / Directory | Purpose |
+| :--- | :--- |
+| `guide_manager.py` | **Main Entry Point.** Contains `GuideManager` class and `GuidedSession` data class. Handles all state logic. |
+| `agents/` | Contains the specialized agent implementations. |
+| `agents/base_guide_agent.py` | Inherits from project's `BaseAgent`. Provides shared utilities for Guide agents. |
+| `agents/locate_agent.py` | **Planner.** Implements curriculum generation logic. |
+| `agents/interactive_agent.py` | **Visualizer.** Implements HTML generation and fallback logic. |
+| `agents/chat_agent.py` | **Tutor.** Implements Q&A logic. |
+| `agents/summary_agent.py` | **Reviewer.** Implements session summarization. |
+| `prompts/` | Contains YAML prompt templates (localized). |
+
+### 2. Configuration Reference
+
+The system relies on two key configuration files located in the project root's `config/` directory.
+
+#### `config/main.yaml` (System Paths)
+Controls where data is stored. The Guide module uses `guide_output_dir`.
+```yaml
+paths:
+  guide_output_dir: ./data/user/guide  # Where JSON sessions are saved
+```
+
+#### `config/agents.yaml` (LLM Parameters)
+Controls the "creativity" and "memory" of the agents. The Guide module has its own section:
+```yaml
+guide:
+  temperature: 0.5    # Balanced creativity. Lower than creative writing, higher than coding.
+  max_tokens: 16192   # High token limit to handle long HTML generation and context.
+```
+
+### 3. Prompt Engineering Guide (`src/agents/guide/prompts/`)
+
+Prompts are externalized in YAML files to allow for easy tuning without code changes. Each agent has a corresponding file.
+
+| File | Key Keys | Role |
+| :--- | :--- | :--- |
+| `locate_agent.yaml` | `system`, `user_template` | Instructs the LLM to analyze records and output a JSON list of knowledge points. |
+| `interactive_agent.yaml` | `system`, `user_template` | Instructs the LLM to generate specific HTML structures with Katex support. |
+| `chat_agent.yaml` | `system` | Defines the persona of a "Patient Tutor" who only answers based on provided context. |
+| `summary_agent.yaml` | `system` | Instructs the LLM to synthesize a final report. |
+
+**Tip for Developers:** When modifying prompts, always ensure you maintain the `json_object` response format requirement for the `LocateAgent`, as the code explicitly attempts to parse JSON.
+
+### 4. Development Workflow
+
+#### Adding a New Feature (e.g., "Quiz Mode")
+1.  **Define Agent:** Create `src/agents/guide/agents/quiz_agent.py`.
+2.  **Add Prompt:** Create `src/agents/guide/prompts/zh/quiz_agent.yaml`.
+3.  **Update Manager:** Add `quiz()` method to `GuideManager` to invoke the agent and update session state.
+4.  **Register:** Add the agent to `src/agents/guide/agents/__init__.py`.
+
+#### Running Tests
+To verify changes in the guide module:
+```bash
+# Run syntax check
+python3 -m compileall src/agents/guide
+
+# Run unit tests (if available)
+pytest tests/agents/guide/
+```
