@@ -43,7 +43,11 @@ class InteractiveAgent(BaseAgent):
         return response.strip()
 
     def _validate_html(self, html: str) -> bool:
-        """Validate if HTML is basically valid"""
+        """
+        Validate if HTML is basically valid.
+
+        Used to decide whether to trigger the Fallback Mechanism.
+        """
         return (
             "<html" in html.lower()
             or "<!doctype" in html.lower()
@@ -52,7 +56,13 @@ class InteractiveAgent(BaseAgent):
         )
 
     def _generate_fallback_html(self, knowledge: dict[str, Any]) -> str:
-        """Generate fallback HTML page"""
+        """
+        Generate fallback HTML page (Fallback Mechanism).
+
+        If the LLM generates invalid HTML (e.g., malformed tags, empty response),
+        this method returns a safe, pre-rendered HTML template containing the
+        raw knowledge text. This ensures the user experience is never blocked.
+        """
         title = knowledge.get("knowledge_title", "Knowledge Point")
         summary = knowledge.get("knowledge_summary", "").replace("\n", "<br>")
         difficulty = knowledge.get("user_difficulty", "").replace("\n", "<br>")
