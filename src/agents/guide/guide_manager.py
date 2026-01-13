@@ -44,7 +44,21 @@ class GuidedSession:
 
 
 class GuideManager:
-    """Guided learning manager"""
+    """
+    Guided Learning Manager (State Machine & Controller)
+
+    The GuideManager orchestrates the entire interactive learning lifecycle.
+    It acts as the central hub connecting specialized agents (Locate, Interactive, Chat)
+    to the user session state.
+
+    Architecture Overview:
+    - **Initialization**: Uses LocateAgent to analyze notebooks and plan the curriculum.
+    - **Learning Loop**: Uses InteractiveAgent to generate visualizations for each step.
+    - **Interaction**: Uses ChatAgent for context-aware Q&A, scoped to the current topic.
+    - **Completion**: Uses SummaryAgent to wrap up the session.
+
+    See `docs/guide/interactive_learning_architecture.md` for detailed design.
+    """
 
     def __init__(
         self,
@@ -151,15 +165,21 @@ class GuideManager:
         self, notebook_id: str, notebook_name: str, records: list[dict[str, Any]]
     ) -> dict[str, Any]:
         """
-        Create new learning session
+        Create new learning session (Phase 1: Initialization)
+
+        Logic Flow:
+        1. Validate inputs (notebook_id, records).
+        2. Call LocateAgent to analyze records and extract KnowledgePoints.
+        3. Initialize a GuidedSession object with status="initialized".
+        4. Persist the session to disk (JSON).
 
         Args:
             notebook_id: Notebook ID
             notebook_name: Notebook name
-            records: Notebook records
+            records: Notebook records (List of question/answer pairs)
 
         Returns:
-            Session creation result
+            dict: Session creation result containing session_id and knowledge points.
         """
         session_id = str(uuid.uuid4())[:8]
 
@@ -250,13 +270,21 @@ class GuideManager:
 
     async def start_learning(self, session_id: str) -> dict[str, Any]:
         """
-        Start learning the first knowledge point
+        Start learning the first knowledge point (Phase 2: Active Learning)
+
+        Logic Flow:
+        1. Load session from disk.
+        2. Retrieve the first knowledge point (Index 0).
+        3. Call InteractiveAgent to generate HTML visualization.
+           - Handles fallback if HTML generation fails.
+        4. Update session state (status="learning", current_index=0).
+        5. Save session.
 
         Args:
             session_id: Session ID
 
         Returns:
-            First knowledge point information and interactive page
+            dict: First knowledge point info, generated HTML, and progress stats.
         """
         session = self._load_session(session_id)
         if not session:
@@ -381,14 +409,22 @@ class GuideManager:
 
     async def chat(self, session_id: str, user_message: str) -> dict[str, Any]:
         """
-        Process user chat message
+        Process user chat message (Phase 3: Interaction)
+
+        Logic Flow:
+        1. Context Scoping: Filter global chat history to find messages relevant
+           to the *current* knowledge point only.
+        2. Call ChatAgent with scoped history and current knowledge context.
+        3. Append the user query and AI response to the global history,
+           tagged with the current `knowledge_index`.
+        4. Save session.
 
         Args:
             session_id: Session ID
             user_message: User message
 
         Returns:
-            Assistant's answer
+            dict: Assistant's answer and context info.
         """
         session = self._load_session(session_id)
         if not session:
